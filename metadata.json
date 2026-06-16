@@ -1,0 +1,6 @@
+{
+  "name": "Shader Point Cloud",
+  "description": "A complex, dense point cloud visualization using custom WebGL shaders.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}
