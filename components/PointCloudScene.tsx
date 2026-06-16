@@ -138,6 +138,8 @@ function Particles() {
   
   const mouseRef = useRef(new THREE.Vector2(0, 0));
   const mouseVelocityRef = useRef(0);
+  const isPausedRef = useRef(false);
+  const timeAccRef = useRef(0);
   
   useEffect(() => {
     const handleMouseMove = (event: MouseEvent) => {
@@ -153,8 +155,20 @@ function Particles() {
         mouseRef.current.x = nx;
         mouseRef.current.y = ny;
     };
+    
+    const handleKeyDown = (event: KeyboardEvent) => {
+        if (event.code === 'Space') {
+            event.preventDefault(); // Prevent page scrolling
+            isPausedRef.current = !isPausedRef.current;
+        }
+    };
+    
     window.addEventListener('mousemove', handleMouseMove);
-    return () => window.removeEventListener('mousemove', handleMouseMove);
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+        window.removeEventListener('mousemove', handleMouseMove);
+        window.removeEventListener('keydown', handleKeyDown);
+    };
   }, []);
 
   // Initialize particles in a spherical/disk shape using lazy state
@@ -227,10 +241,13 @@ function Particles() {
     [historyBuffer]
   );
 
-  useFrame((state) => {
+  useFrame((state, delta) => {
     if (pointsRef.current) {
+        if (isPausedRef.current) return;
+
         const material = pointsRef.current.material as THREE.ShaderMaterial;
-        material.uniforms.uTime.value = state.clock.elapsedTime;
+        timeAccRef.current += delta;
+        material.uniforms.uTime.value = timeAccRef.current;
         
         // Decay and map mouse velocity
         mouseVelocityRef.current *= 0.9;
@@ -333,14 +350,16 @@ export default function PointCloudScene() {
         </EffectComposer>
       </Canvas>
       
-      {/* HUD-like subtle overlays to enhance "data" feel */}
+      {/* HUD overlays */}
       <div className="pointer-events-none absolute inset-0 border-[40px] border-white/5 opacity-20" />
-      <div className="pointer-events-none absolute bottom-8 left-8 font-mono text-[10px] text-blue-500/40 uppercase tracking-[0.2em]">
-        Interactive Data Swarm // 0x4F2A
+      <div className="pointer-events-none absolute top-8 left-8 font-mono text-2xl font-bold text-white/20 uppercase tracking-[0.2em]">
+        MK
       </div>
-      <div className="pointer-events-none absolute top-8 right-8 font-mono text-[10px] text-blue-500/40 uppercase tracking-[0.2em] text-right">
-        Tracking: Active<br />
-        Field Physics: Enabled
+      <div className="pointer-events-none absolute bottom-8 left-8 font-mono text-xs text-white/60 uppercase tracking-[0.1em]">
+        Press Spacebar to freeze the Particles
+      </div>
+      <div className="pointer-events-none absolute top-8 right-8 font-mono text-xs text-white/60 uppercase tracking-[0.2em] text-right">
+        MIRHAZAR KHAN
       </div>
     </div>
   );
