@@ -70,27 +70,46 @@ void main() {
     // Scale properties
     float isMoving = uMouseSpeed;
     
-    // Spread calculation - tighter core, more elegant tail
-    float coreSpread = mix(0.01, 1.0, aDelay); 
+    // Spread bounds
+    float majorSpread = mix(0.1, 2.0, aDelay); 
+    float tailWave = sin(uTime * 10.0 - aDelay * 20.0) * 0.5 + 0.5;
+    float tailSpread = mix(majorSpread, 12.0 * tailWave, aDelay); 
+    float amplitude = mix(majorSpread, tailSpread, isMoving);
     
-    // Wavy tail effect
-    float tailWave = sin(uTime * 15.0 - aDelay * 25.0) * 0.5 + 0.5;
-    float tailSpread = mix(coreSpread, 10.0 * tailWave, aDelay); 
+    // Create an orthogonal vector to 'dir' for the minor axis of the orbit
+    vec3 up = vec3(0.0, 1.0, 0.0);
+    if (abs(dir.y) > 0.99) up = vec3(1.0, 0.0, 0.0);
+    vec3 right = normalize(cross(dir, up));
     
-    float actualSpread = mix(coreSpread, tailSpread, isMoving);
+    // Orbital mechanics (high eccentricity ellipse)
+    float orbitSpeed = 1.5 + aRandomFactor * 3.5;
+    float t = uTime * orbitSpeed + aRandomFactor * 100.0;
+    
+    // Minor axis amplitude (how much it misses the center by)
+    float minorAmplitude = amplitude * mix(0.02, 0.25, aRandomFactor); 
+    
+    // Calculate elliptical position
+    vec3 orbitPos = dir * sin(t) * amplitude + right * cos(t) * minorAmplitude;
     
     // Turbulence added in the middle
-    float time = uTime * 0.8;
-    vec3 noiseDisp = trigNoise(dir * 2.0 + vec3(time, -time, time * 0.5));
+    float time = uTime * 1.5;
+    vec3 noiseDisp = trigNoise(orbitPos * 2.0 + vec3(time, -time, time * 0.8));
+    
+    vec3 jitter = trigNoise(vec3(aRandomFactor * 100.0 + uTime * 5.0, aRandomFactor * 50.0 - uTime * 4.0, uTime * 6.0));
     
     // Add swirl to the tail when moving
-    float swirlAngle = aDelay * 10.0 - uTime * 5.0;
+    float swirlAngle = aDelay * 15.0 - uTime * 8.0;
     float s = sin(swirlAngle);
     float c = cos(swirlAngle);
-    vec3 swirlDir = dir;
-    swirlDir.xy *= mat2(c, -s, s, c);
+    vec3 swirlPos = orbitPos;
+    swirlPos.xy *= mat2(c, -s, s, c);
+    swirlPos.xz *= mat2(c, -s, s, c);
     
-    vec3 finalPos = centerPos + mix(dir, swirlDir + noiseDisp * 0.8, isMoving * aDelay) * actualSpread;
+    vec3 chaoticPos = swirlPos + noiseDisp * 1.5 + jitter * 1.0;
+    
+    // Combine base orbit with chaotic swirl
+    float chaos = min(isMoving * aDelay * 2.5, 1.0);
+    vec3 finalPos = centerPos + mix(orbitPos, chaoticPos, chaos);
     
     vec4 mvPosition = modelViewMatrix * vec4(finalPos, 1.0);
     
@@ -100,12 +119,17 @@ void main() {
     
     float activeAlpha = mix(1.0, isMoving * tailFade, coreVsTail);
     
-    vAlpha = activeAlpha;
+    // Depth of field (Z-axis scale and alpha attenuation)
+    float distToCamera = -mvPosition.z;
+    float dofAlpha = smoothstep(100.0, 10.0, distToCamera); 
+    
+    vAlpha = activeAlpha * (0.2 + 0.8 * dofAlpha);
     
     // Pulse
     float pulse = sin(uTime * 8.0 + aRandomFactor * 20.0) * 0.3 + 0.7;
     
-    gl_PointSize = aSize * pulse * (40.0 / -mvPosition.z);
+    // Size attenuation based on distance (closer = bigger, further = smaller)
+    gl_PointSize = aSize * pulse * (60.0 / distToCamera);
     gl_Position = projectionMatrix * mvPosition;
 }
 `;
@@ -116,18 +140,23 @@ varying float vAlpha;
 
 void main() {
     vec2 xy = gl_PointCoord.xy - vec2(0.5);
-    float distanceToCenter = length(xy);
+    float a = atan(xy.y, xy.x);
+    float d = length(xy);
     
-    if (distanceToCenter > 0.5) {
+    // 5-pointed star shape
+    float starRadius = 0.15 + 0.35 * pow(cos(a * 5.0) * 0.5 + 0.5, 3.0);
+    
+    if (d > starRadius) {
         discard;
     }
     
-    float edge = smoothstep(0.5, 0.1, distanceToCenter);
-    float core = smoothstep(0.15, 0.0, distanceToCenter);
+    // Sharp unblurred rendering with slight antialiasing
+    float alpha = smoothstep(starRadius, starRadius - 0.01, d) * vAlpha;
     
-    vec3 finalColor = mix(vColor, vec3(1.0), core * 0.7);
+    // Reduced bright core glow
+    vec3 finalColor = mix(vColor, vec3(1.0), smoothstep(starRadius * 0.1, 0.0, d) * 0.15);
     
-    gl_FragColor = vec4(finalColor, edge * vAlpha);
+    gl_FragColor = vec4(finalColor, alpha);
 }
 `;
 
@@ -221,7 +250,8 @@ function Particles() {
         c[i * 3 + 1] = color.g;
         c[i * 3 + 2] = color.b;
         
-        s[i] = Math.random() * 3.5 + 0.5;
+        // Random size with many small and fewer large particles for natural variation
+        s[i] = Math.pow(Math.random(), 5.0) * 8.0 + 0.8;
         rf[i] = Math.random();
     }
     
@@ -274,13 +304,15 @@ function Particles() {
              targetPos = state.camera.position.clone().add(dir.multiplyScalar(state.camera.position.length()));
         }
 
-        // 2. Update history buffer
+        // 2. Update history buffer to follow path fluidly with flexibility
         for (let i = 49; i > 0; i--) {
             historyBuffer[i].copy(historyBuffer[i - 1]);
         }
         
-        // Push precise target to the head
-        historyBuffer[0].copy(targetPos);
+        // Head smoothly targets mouse to create flexible pursuit curves and avoid hard bends
+        // Added more inertial delay by reducing the lerp factor
+        const dt = Math.min(delta, 0.1) * 60;
+        historyBuffer[0].lerp(targetPos, 1 - Math.exp(-0.15 * dt));
 
         // 3. Keep mesh static! The vertex shader does all the positioning based on history array.
         pointsRef.current.position.set(0, 0, 0);
@@ -339,12 +371,12 @@ export default function PointCloudScene() {
           enableZoom={true}
           maxDistance={100}
           minDistance={25}
-          autoRotate={true}
+          autoRotate={false}
           autoRotateSpeed={3.5}
         />
         
         <EffectComposer>
-            <Bloom luminanceThreshold={0.2} luminanceSmoothing={0.9} intensity={1.5} />
+            <Bloom luminanceThreshold={0.5} luminanceSmoothing={0.9} intensity={0.4} />
             <ChromaticAberration offset={new THREE.Vector2(0.002, 0.002)} />
             <Vignette eskil={false} offset={0.1} darkness={1.1} />
         </EffectComposer>
